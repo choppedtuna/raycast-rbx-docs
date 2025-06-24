@@ -443,8 +443,6 @@ class RobloxDocsDataFetcher {
     const cleanPath = path.replace(/^content\/en-us\//, "").replace(/\.(md|yaml)$/, "");
     return `https://create.roblox.com/docs/${cleanPath}`;
   }
-
-
 }
 
 export default RobloxDocsDataFetcher;
