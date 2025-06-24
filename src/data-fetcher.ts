@@ -10,7 +10,19 @@ export interface DocItem {
   url: string;
   category: string;
   keywords: string[];
-  type: "class" | "service" | "tutorial" | "guide" | "reference" | "enum" | "global" | "property" | "method" | "event" | "callback" | "function";
+  type:
+    | "class"
+    | "service"
+    | "tutorial"
+    | "guide"
+    | "reference"
+    | "enum"
+    | "global"
+    | "property"
+    | "method"
+    | "event"
+    | "callback"
+    | "function";
 }
 
 interface FileMetadata {
@@ -109,8 +121,7 @@ class RobloxDocsDataFetcher {
       return docItems;
     } catch (error) {
       console.error("Error fetching docs data:", error);
-      console.log("Falling back to minimal sample data");
-      return this.getFallbackData();
+      return [];
     }
   }
 
@@ -321,13 +332,13 @@ class RobloxDocsDataFetcher {
 
     const category = this.getCategoryFromPath(parentMetadata.path);
     const baseUrl = this.pathToUrl(parentMetadata.path);
-    
+
     // Extract just the property/method name for the anchor (remove class prefix if present)
-    const anchorName = subitem.title.includes('.') ? subitem.title.split('.').pop() : subitem.title;
-    
+    const anchorName = subitem.title.includes(".") ? subitem.title.split(".").pop() : subitem.title;
+
     // Generate URL with anchor link for direct navigation to the specific property/method/event
     const url = `${baseUrl}#${anchorName}`;
-    
+
     // Determine the specific type based on subitem.type
     let itemType: DocItem["type"];
     switch (subitem.type) {
@@ -433,30 +444,7 @@ class RobloxDocsDataFetcher {
     return `https://create.roblox.com/docs/${cleanPath}`;
   }
 
-  private getFallbackData(): DocItem[] {
-    // Minimal fallback data if fetching fails
-    return [
-      {
-        id: "fallback-audioplayer",
-        title: "AudioPlayer",
-        description:
-          "Used to play audio assets. Provides a single Output pin which can be connected to other pins via Wires.",
-        url: "https://create.roblox.com/docs/reference/engine/classes/AudioPlayer",
-        category: "Classes",
-        keywords: ["audio", "player", "sound", "music"],
-        type: "class",
-      },
-      {
-        id: "fallback-part",
-        title: "Part",
-        description: "A fundamental building block in Roblox, representing a 3D object in the workspace.",
-        url: "https://create.roblox.com/docs/reference/engine/classes/Part",
-        category: "Classes",
-        keywords: ["part", "3d", "object", "workspace"],
-        type: "class",
-      },
-    ];
-  }
+
 }
 
 export default RobloxDocsDataFetcher;
