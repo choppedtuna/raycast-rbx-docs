@@ -10,7 +10,7 @@ export interface DocItem {
   url: string;
   category: string;
   keywords: string[];
-  type: "class" | "service" | "tutorial" | "guide" | "reference" | "enum" | "global";
+  type: "class" | "service" | "tutorial" | "guide" | "reference" | "enum" | "global" | "property" | "method" | "event" | "callback" | "function";
 }
 
 interface FileMetadata {
@@ -320,16 +320,44 @@ class RobloxDocsDataFetcher {
     }
 
     const category = this.getCategoryFromPath(parentMetadata.path);
-    const url = this.pathToUrl(parentMetadata.path);
+    const baseUrl = this.pathToUrl(parentMetadata.path);
+    
+    // Extract just the property/method name for the anchor (remove class prefix if present)
+    const anchorName = subitem.title.includes('.') ? subitem.title.split('.').pop() : subitem.title;
+    
+    // Generate URL with anchor link for direct navigation to the specific property/method/event
+    const url = `${baseUrl}#${anchorName}`;
+    
+    // Determine the specific type based on subitem.type
+    let itemType: DocItem["type"];
+    switch (subitem.type) {
+      case "properties":
+        itemType = "property";
+        break;
+      case "methods":
+        itemType = "method";
+        break;
+      case "events":
+        itemType = "event";
+        break;
+      case "callbacks":
+        itemType = "callback";
+        break;
+      case "functions":
+        itemType = "function";
+        break;
+      default:
+        itemType = "reference";
+    }
 
     return {
       id: `${this.generateIdFromPath(parentMetadata.path)}-${subitem.title.toLowerCase().replace(/[^a-z0-9]/g, "-")}`,
       title: subitem.title,
-      description: subitem.description || `${subitem.type} of ${parentMetadata.title}`,
+      description: subitem.description || `${subitem.type.slice(0, -1)} of ${parentMetadata.title}`, // Remove 's' from end (e.g., "properties" -> "property")
       url,
       category,
       keywords: this.generateKeywords(subitem.title, subitem.description || "", parentMetadata.path),
-      type: "reference",
+      type: itemType,
     };
   }
 
