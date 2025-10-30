@@ -9,11 +9,16 @@
 
 ### Fixed
 - Fixed page anchor navigation for direct links to API methods/properties/events
+- Fixed race condition causing incomplete markdown rendering on certain search phrases
 - Improved memory management with optimized batch processing
+- Fixed performance issues with helper function recreation on every render
 
 ### Changed
 - Removed fallback data mechanism (now uses empty array for cleaner error handling)
 - Enhanced icon display with better visual consistency
+- Updated method, function, and event icons for better visual clarity
+- Refactored codebase for improved maintainability (~30% code reduction)
+- Optimized markdown rendering with array-based string building
 
 ## [1.0.0] - {PR_MERGE_DATE}
 
