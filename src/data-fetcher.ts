@@ -196,27 +196,16 @@ class RobloxDocsDataFetcher {
     return this.fetchFreshData();
   }
 
-  /**
-   * Get cached data without any network requests
-   */
   private getCachedData(): { data: DocItem[]; sha: string | null; timestamp: number; version?: string } | null {
     const cachedData = this.cache.get(this.cacheKey);
-    if (!cachedData) {
-      return null;
-    }
+    if (!cachedData) return null;
 
     try {
       const parsed = JSON.parse(cachedData);
       const now = Date.now();
 
-      // Check if extension version has changed
-      if (parsed.version !== this.extensionVersion) {
-        console.log(`Extension version changed from ${parsed.version} to ${this.extensionVersion}, invalidating cache`);
-        return null;
-      }
-
-      // Check if cache is expired (fallback time-based check)
-      if (now - parsed.timestamp > this.cacheExpiry) {
+      // Validate version and expiry
+      if (parsed.version !== this.extensionVersion || now - parsed.timestamp > this.cacheExpiry) {
         return null;
       }
 
@@ -256,42 +245,35 @@ class RobloxDocsDataFetcher {
       });
   }
 
-  /**
-   * Fetch fresh data from GitHub
-   */
   private async fetchFreshData(): Promise<DocItem[]> {
-    // Get the latest commit SHA
     const latestSha = await this.getLatestCommitSha();
 
     try {
-      // Download ZIP archive from Roblox creator-docs repository
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60000); // 60 second timeout for large download
+      const timeout = setTimeout(() => controller.abort(), 60000);
 
       const zipResponse = await fetch("https://github.com/Roblox/creator-docs/archive/refs/heads/main.zip", {
         signal: controller.signal,
       });
       clearTimeout(timeout);
 
-      if (!zipResponse.ok) {
-        throw new Error(`Failed to download docs: ${zipResponse.statusText}`);
-      }
+      if (!zipResponse.ok) throw new Error(`Failed to download docs: ${zipResponse.statusText}`);
 
       const zipBuffer = await zipResponse.buffer();
       const docItems = await this.processZipArchiveOptimized(zipBuffer);
 
-      // Cache the results with SHA, timestamp, and extension version
+      // Cache results
       const cacheData = {
         data: docItems,
         timestamp: Date.now(),
-        sha: latestSha, // Store the SHA for future comparisons
-        version: this.extensionVersion, // Store extension version to invalidate cache on updates
+        sha: latestSha,
+        version: this.extensionVersion,
       };
       this.cache.set(this.cacheKey, JSON.stringify(cacheData));
 
       return docItems;
     } catch (error) {
-      console.error("Error fetching docs data:", error);
+      console.error("Error fetching docs:", error);
       return [];
     }
   }

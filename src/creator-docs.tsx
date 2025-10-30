@@ -41,6 +41,144 @@ const ACTION_ICONS = {
   trash: "../assets/icons/trash.svg",
 } as const;
 
+// Reference type mapping configuration
+const REFERENCE_TYPES: Record<string, string> = {
+  Class: "classes",
+  Datatype: "datatypes",
+  Enum: "enums",
+  Global: "globals",
+};
+
+// Helper: Process Roblox API references in text
+function processClassReferences(text: string): string {
+  if (!text) return "";
+
+  try {
+    const typePattern = Object.keys(REFERENCE_TYPES).join("|");
+    const getUrlPath = (refType: string) => REFERENCE_TYPES[refType] || "classes";
+
+    // Process references in order of specificity
+    return text
+      .replace(new RegExp(`\`(${typePattern})\\.(\\w+)\\|([^\`]+)\``, "g"), (_m, refType, name, displayText) => {
+        return `[\`${displayText}\`](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name})`;
+      })
+      .replace(
+        new RegExp(`(?<!\`|\\[)(${typePattern})\\.(\\w+)\\|([^\\s\`]+)(?!\`)`, "g"),
+        (_m, refType, name, displayText) => {
+          return `[\`${displayText}\`](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name})`;
+        },
+      )
+      .replace(
+        new RegExp(`\`(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)\\|([^\`]+)\``, "g"),
+        (_m, refType, name, method, displayText) => {
+          return `[${displayText}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${method})`;
+        },
+      )
+      .replace(
+        new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)\\|(\\S+)(?!\`)`, "g"),
+        (_m, refType, name, method, displayText) => {
+          return `[${displayText}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${method})`;
+        },
+      )
+      .replace(new RegExp(`\`(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)\``, "g"), (_m, refType, name, method) => {
+        return `[${method}()](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${method})`;
+      })
+      .replace(
+        new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)(?!\`|\\|)`, "g"),
+        (_m, refType, name, method) => {
+          return `[${method}()](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${method})`;
+        },
+      )
+      .replace(
+        new RegExp(`\`(${typePattern})\\.(\\w+)\\.(\\w+)\\|([^\`]+)\``, "g"),
+        (_m, refType, name, anchor, displayText) => {
+          return `[${displayText}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${anchor})`;
+        },
+      )
+      .replace(
+        new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+)\\.(\\w+)\\|([^\\s\`]+)(?!\`)`, "g"),
+        (_m, refType, name, anchor, displayText) => {
+          return `[${displayText}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${anchor})`;
+        },
+      )
+      .replace(new RegExp(`\`(${typePattern})\\.(\\w+)\\.(\\w+)\``, "g"), (_m, refType, name, property) => {
+        return `[${property}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${property})`;
+      })
+      .replace(
+        new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+)\\.(\\w+)(?!\`|\\|)`, "g"),
+        (_m, refType, name, property) => {
+          return `[${property}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${property})`;
+        },
+      )
+      .replace(new RegExp(`\`(${typePattern})\\.(\\w+)\``, "g"), (_m, refType, name) => {
+        return `[${name}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name})`;
+      })
+      .replace(new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+)(?!\`|\\.|:)`, "g"), (_m, refType, name) => {
+        return `[${name}](https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name})`;
+      });
+  } catch (error) {
+    console.error("Error processing class references:", error);
+    return text; // Return original text if processing fails
+  }
+}
+
+// Helper: Process code blocks for Lua syntax highlighting
+function processCodeBlocks(text: string): string {
+  if (!text) return "";
+  return text.replace(/```(lua|luau)\n([\s\S]*?)```/g, (_m, _lang, code) => `\`\`\`lua\n${code}\`\`\``);
+}
+
+// Helper: Render markdown for detail view
+function renderDetailMarkdown(doc: DocItem): string {
+  if (!doc?.title || !doc?.url) return "**Error:** Invalid documentation item";
+
+  const parts: string[] = [];
+
+  // Header
+  parts.push(`## \`${doc.title}\`\n\n\`${doc.type}\` · ${doc.category}\n\n`);
+
+  // Metadata
+  if (doc.metadata) {
+    const { parameters, returnType, tags, security } = doc.metadata;
+
+    if (parameters?.length) {
+      parts.push(`### Parameters\n\n`);
+      parameters.forEach((p, i) => {
+        parts.push(`${p.name} · \`${processClassReferences(p.type)}\``);
+        if (p.description) parts.push(`\n\n${processClassReferences(p.description)}`);
+        if (i < parameters.length - 1) parts.push(`\n\n`);
+      });
+      parts.push(`\n\n`);
+    }
+
+    if (returnType) parts.push(`### Returns\n\n\`${processClassReferences(returnType)}\`\n\n`);
+    if (tags?.length) parts.push(`### Tags\n\n${tags.map((t) => `\`${t}\``).join("  ")}\n\n`);
+    if (security) parts.push(`**Security:** ${security}\n\n`);
+
+    if (parameters || returnType || tags || security) parts.push(`---\n\n`);
+  }
+
+  // Content
+  const hasContent = doc.content?.trim();
+  const contentMatchesDescription = doc.content?.trim() === doc.description?.trim();
+
+  if (doc.description && (!hasContent || contentMatchesDescription)) {
+    parts.push(`### Description\n\n${processCodeBlocks(processClassReferences(doc.description))}\n\n`);
+  } else if (hasContent && !contentMatchesDescription) {
+    const truncated = doc.content!.length > 1500 ? doc.content!.substring(0, 1500) : doc.content!;
+    parts.push(`### Details\n\n${processCodeBlocks(processClassReferences(truncated))}\n\n`);
+  } else if (!doc.description && !hasContent) {
+    parts.push(
+      `### Description\n\n*No preview available*\n\n*This item has limited documentation. View the full page for more details.*\n\n`,
+    );
+  }
+
+  // Footer - always add this
+  parts.push(`---\n\n**[📖 View Full Documentation →](${doc.url})**`);
+
+  return parts.join("");
+}
+
 export default function Command() {
   const preferences = getPreferenceValues<Preferences>();
   const [searchText, setSearchText] = useState("");
@@ -48,12 +186,12 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(true);
   const [showingDetail, setShowingDetail] = useState(true);
 
-  // Initialize data fetcher
-  const dataFetcher = new RobloxDocsDataFetcher();
+  // Initialize data fetcher once - critical for performance
+  const dataFetcher = useMemo(() => new RobloxDocsDataFetcher(), []);
 
   useEffect(() => {
     loadDocsData();
-  }, []);
+  }, []); // loadDocsData is stable
 
   const isSearchEmpty = searchText.trim() === "";
 
@@ -189,277 +327,6 @@ export default function Command() {
   };
 
   const getIcon = (name: string) => (preferences.hideIcons ? undefined : name);
-
-  const processClassReferences = (text: string): string => {
-    // Convert API references (Class.*, DataType.*, Enum.*, Global.*) to markdown links
-    // Supports formats:
-    // - Class.ClassName / DataType.TypeName -> links to class/datatype page
-    // - Class.ClassName.Property -> links to class page with anchor
-    // - Class.ClassName.Property|DisplayText -> links to class page with anchor, custom display
-    // - Class.ClassName:Method()|DisplayText -> links to method with anchor, custom display
-    // Display only the name or custom display text (without prefix or backticks)
-
-    // Configuration: Add new reference types here
-    const REFERENCE_TYPES: Record<string, string> = {
-      Class: "classes",
-      Datatype: "datatypes",
-      Enum: "enums",
-      Global: "globals",
-    };
-
-    // Generate regex pattern from reference types (e.g., "Class|DataType|Enum|Global")
-    const typePattern = Object.keys(REFERENCE_TYPES).join("|");
-
-    // Helper function to get URL path for a reference type
-    const getUrlPath = (refType: string) => REFERENCE_TYPES[refType] || "classes";
-
-    // IMPORTANT: Handle inline code-wrapped references FIRST before standalone ones
-    // This prevents double-processing and ensures code-formatted refs are properly converted
-
-    // Handle simple enum/type references with display text in code: `Enum.Name|DisplayValue`
-    text = text.replace(
-      new RegExp(`\`(${typePattern})\\.(\\w+)\\|([^\`]+)\``, "g"),
-      (_match, refType, name, displayText) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}`;
-        return `[\`${displayText}\`](${url})`;
-      },
-    );
-
-    // Handle standalone enum/type references with display text: Enum.Name|DisplayValue
-    text = text.replace(
-      new RegExp(`(?<!\`|\\[)(${typePattern})\\.(\\w+)\\|([^\\s\`]+)(?!\`)`, "g"),
-      (_match, refType, name, displayText) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}`;
-        return `[\`${displayText}\`](${url})`;
-      },
-    );
-
-    // Handle method references with colons and custom display text: `Class.ClassName:Method()|DisplayText`
-    text = text.replace(
-      new RegExp(`\`(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)\\|([^\`]+)\``, "g"),
-      (_match, refType, name, methodName, displayText) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${methodName}`;
-        return `[${displayText}](${url})`;
-      },
-    );
-
-    // Handle standalone method references with colons and custom display text
-    text = text.replace(
-      new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)\\|(\\S+)(?!\`)`, "g"),
-      (_match, refType, name, methodName, displayText) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${methodName}`;
-        return `[${displayText}](${url})`;
-      },
-    );
-
-    // Handle method references with colons (no custom display): `Class.ClassName:Method()`
-    text = text.replace(
-      new RegExp(`\`(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)\``, "g"),
-      (_match, refType, name, methodName) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${methodName}`;
-        return `[${methodName}()](${url})`;
-      },
-    );
-
-    // Handle standalone method references with colons
-    text = text.replace(
-      new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+):(\\w+)\\([^)]*\\)(?!\`|\\|)`, "g"),
-      (_match, refType, name, methodName) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${methodName}`;
-        return `[${methodName}()](${url})`;
-      },
-    );
-
-    // Handle backtick-wrapped references with property and custom display text: `Class.ClassName.Property|DisplayText`
-    text = text.replace(
-      new RegExp(`\`(${typePattern})\\.(\\w+)\\.(\\w+)\\|([^\`]+)\``, "g"),
-      (_match, refType, name, anchor, displayText) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${anchor}`;
-        return `[${displayText}](${url})`;
-      },
-    );
-
-    // Handle standalone references with property and custom display text (more permissive)
-    text = text.replace(
-      new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+)\\.(\\w+)\\|([^\\s\`]+)(?!\`)`, "g"),
-      (_match, refType, name, anchor, displayText) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${anchor}`;
-        return `[${displayText}](${url})`;
-      },
-    );
-
-    // Handle backtick-wrapped references with property (no custom display): `Class.ClassName.Property`
-    text = text.replace(
-      new RegExp(`\`(${typePattern})\\.(\\w+)\\.(\\w+)\``, "g"),
-      (_match, refType, name, propertyName) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${propertyName}`;
-        return `[${propertyName}](${url})`;
-      },
-    );
-
-    // Handle standalone references with property
-    text = text.replace(
-      new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+)\\.(\\w+)(?!\`|\\|)`, "g"),
-      (_match, refType, name, propertyName) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}#${propertyName}`;
-        return `[${propertyName}](${url})`;
-      },
-    );
-
-    // Handle backtick-wrapped simple references: `Class.ClassName` or `DataType.TypeName`
-    text = text.replace(new RegExp(`\`(${typePattern})\\.(\\w+)\``, "g"), (_match, refType, name) => {
-      const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}`;
-      return `[${name}](${url})`;
-    });
-
-    // Handle standalone simple references
-    text = text.replace(
-      new RegExp(`(?<!\`|\\[\`)(${typePattern})\\.(\\w+)(?!\`|\\.|:)`, "g"),
-      (_match, refType, name) => {
-        const url = `https://create.roblox.com/docs/reference/engine/${getUrlPath(refType)}/${name}`;
-        return `[${name}](${url})`;
-      },
-    );
-
-    return text;
-  };
-
-  const processCodeBlocks = (text: string): string => {
-    // Convert code blocks to use 'lua' syntax highlighting for proper Luau highlighting
-    // Matches ```lua or ```luau code blocks and ensures they're properly formatted
-    return text.replace(/```(lua|luau)\n([\s\S]*?)```/g, (_match, _lang, code) => {
-      // Return with lua syntax highlighting (Raycast supports this)
-      return `\`\`\`lua\n${code}\`\`\``;
-    });
-  };
-
-  const renderDetailMarkdown = (doc: DocItem): string => {
-    if (!doc || !doc.title) {
-      return "Loading...";
-    }
-
-    // Use smaller heading (##) or code formatting to prevent wrapping
-    let markdown = `## ${doc.title}\n\n`;
-
-    // Add type and category with better styling
-    markdown += `\`${doc.type}\` · ${doc.category}\n\n`;
-
-    // Add metadata section for API items - BEFORE description
-    if (doc.metadata) {
-      const hasMetadata =
-        doc.metadata.parameters?.length ||
-        doc.metadata.returnType ||
-        doc.metadata.security ||
-        doc.metadata.tags?.length;
-
-      if (hasMetadata) {
-        // Parameters with improved formatting
-        if (doc.metadata.parameters && doc.metadata.parameters.length > 0) {
-          markdown += `### Parameters\n\n`;
-          const params = doc.metadata.parameters;
-          params.forEach((param, index) => {
-            const paramType = processClassReferences(param.type);
-            markdown += `**${param.name}** · \`${paramType}\``;
-            if (param.description) {
-              markdown += `\n\n${processClassReferences(param.description)}`;
-            }
-            // Add spacing between parameters
-            if (index < params.length - 1) {
-              markdown += `\n\n`;
-            }
-          });
-          markdown += `\n\n`;
-        }
-
-        // Return type with icon
-        if (doc.metadata.returnType) {
-          markdown += `### Returns\n\n\`${processClassReferences(doc.metadata.returnType)}\`\n\n`;
-        }
-
-        // Tags with visual badges
-        if (doc.metadata.tags && doc.metadata.tags.length > 0) {
-          markdown += `### Tags\n\n`;
-          markdown += doc.metadata.tags.map((tag) => `\`${tag}\``).join("  ");
-          markdown += `\n\n`;
-        }
-
-        // Security info (keep compact)
-        if (doc.metadata.security) {
-          markdown += `**Security:** ${doc.metadata.security}\n\n`;
-        }
-
-        markdown += `---\n\n`;
-      }
-    }
-
-    // Determine what content to show
-    const hasContent = doc.content && doc.content.trim() !== "";
-    const contentMatchesDescription = doc.content?.trim() === doc.description?.trim();
-
-    // Show description only if we don't have content, or if content doesn't match description
-    if (doc.description && (!hasContent || contentMatchesDescription)) {
-      const processedDescription = processCodeBlocks(processClassReferences(doc.description));
-      markdown += `### Description\n\n${processedDescription}\n\n`;
-    }
-
-    // Add main content only if it exists and differs from description
-    if (hasContent && !contentMatchesDescription) {
-      const maxContentLength = 1500;
-      const isTruncated = doc.content!.length > maxContentLength;
-
-      let truncatedContent: string;
-      if (isTruncated) {
-        // Truncate to nearest sentence or paragraph boundary
-        const roughCut = doc.content!.substring(0, maxContentLength);
-
-        // Look for paragraph break (double newline) first
-        const lastParagraphIndex = roughCut.lastIndexOf("\n\n");
-
-        // Then look for sentence endings (period, exclamation, question mark followed by space or newline)
-        const sentenceEndRegex = /[.!?][\s\n]/g;
-        let lastSentenceIndex = -1;
-        let match;
-        while ((match = sentenceEndRegex.exec(roughCut)) !== null) {
-          lastSentenceIndex = match.index + 1; // Include the punctuation
-        }
-
-        // Also check for single newline as a fallback
-        const lastNewlineIndex = roughCut.lastIndexOf("\n");
-
-        // Prioritize: paragraph > sentence > newline
-        let cutPoint = -1;
-        if (lastParagraphIndex > maxContentLength * 0.7) {
-          cutPoint = lastParagraphIndex;
-        } else if (lastSentenceIndex > maxContentLength * 0.7) {
-          cutPoint = lastSentenceIndex + 1; // Include the space after punctuation
-        } else if (lastNewlineIndex > maxContentLength * 0.7) {
-          cutPoint = lastNewlineIndex;
-        }
-
-        // If we found a good boundary, use it; otherwise fall back to rough cut
-        truncatedContent = cutPoint > 0 ? doc.content!.substring(0, cutPoint) : roughCut;
-      } else {
-        truncatedContent = doc.content!;
-      }
-
-      const processedContent = processCodeBlocks(processClassReferences(truncatedContent));
-
-      markdown += `### Details\n\n${processedContent}\n\n`;
-    }
-
-    // Show message if no useful content
-    const hasAnyContent = doc.description || hasContent || doc.metadata;
-    if (!hasAnyContent) {
-      markdown += `### Description\n\n*No preview available*\n\n`;
-      markdown += `*This item has limited documentation. View the full page for more details.*\n\n`;
-    }
-
-    // Footer with documentation link
-    markdown += `---\n\n`;
-    markdown += `**[📖 View Full Documentation →](${doc.url})**`;
-
-    return markdown;
-  };
 
   return (
     <List
