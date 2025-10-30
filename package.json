@@ -12,7 +12,18 @@
       "title": "Roblox Creator Docs",
       "subtitle": "Search Creator Docs",
       "description": "Browse and open Roblox Creator Docs in default browser",
-      "mode": "view"
+      "mode": "view",
+      "preferences": [
+        {
+          "name": "hideIcons",
+          "type": "checkbox",
+          "required": false,
+          "title": "Hide Icons",
+          "label": "Hide icons in search results",
+          "description": "When enabled, icons will not be displayed next to search results",
+          "default": false
+        }
+      ]
     }
   ],
   "dependencies": {
