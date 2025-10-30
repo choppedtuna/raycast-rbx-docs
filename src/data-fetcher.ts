@@ -2,6 +2,7 @@ import { Cache } from "@raycast/api";
 import fetch from "node-fetch";
 import JSZip from "jszip";
 import { load as yamlLoad } from "js-yaml";
+import packageJson from "../package.json";
 
 export interface DocItem {
   id: string;
@@ -23,6 +24,14 @@ export interface DocItem {
     | "event"
     | "callback"
     | "function";
+  content?: string; // Full markdown/YAML content for detail view
+  metadata?: {
+    // For API references (classes, enums, etc.)
+    parameters?: Array<{ name: string; type: string; description?: string }>;
+    returnType?: string;
+    security?: string;
+    tags?: string[];
+  };
 }
 
 // Constants
@@ -50,10 +59,16 @@ interface FileMetadata {
   description?: string;
   path: string;
   type: string;
+  content?: string; // Store full content for detail view
   subitems?: Array<{
     type: string;
     title: string;
     description?: string;
+    summary?: string;
+    parameters?: Array<{ name: string; type: string; default?: string }>;
+    returnType?: string;
+    security?: string;
+    tags?: string[];
   }>;
 }
 
@@ -61,12 +76,51 @@ interface YAMLDocData {
   name?: string;
   type?: string;
   summary?: string;
-  properties?: Array<{ name: string; summary?: string; tags?: string[] }>;
-  methods?: Array<{ name: string; summary?: string; tags?: string[] }>;
-  events?: Array<{ name: string; summary?: string; tags?: string[] }>;
-  callbacks?: Array<{ name: string; summary?: string; tags?: string[] }>;
-  items?: Array<{ name: string; summary?: string; tags?: string[] }>;
-  functions?: Array<{ name: string; summary?: string; tags?: string[] }>;
+  description?: string;
+  properties?: Array<{
+    name: string;
+    summary?: string;
+    description?: string;
+    tags?: string[];
+    property_type?: string;
+  }>;
+  methods?: Array<{
+    name: string;
+    summary?: string;
+    description?: string;
+    tags?: string[];
+    parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
+    return_type?: string;
+  }>;
+  events?: Array<{
+    name: string;
+    summary?: string;
+    description?: string;
+    tags?: string[];
+    parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
+  }>;
+  callbacks?: Array<{
+    name: string;
+    summary?: string;
+    description?: string;
+    tags?: string[];
+    parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
+    return_type?: string;
+  }>;
+  items?: Array<{
+    name: string;
+    summary?: string;
+    description?: string;
+    tags?: string[];
+  }>;
+  functions?: Array<{
+    name: string;
+    summary?: string;
+    description?: string;
+    tags?: string[];
+    parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
+    return_type?: string;
+  }>;
   [key: string]: unknown;
 }
 
@@ -74,6 +128,11 @@ interface SubitemData {
   type: string;
   title: string;
   description?: string;
+  summary?: string;
+  parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
+  returnType?: string;
+  security?: string;
+  tags?: string[];
 }
 
 class RobloxDocsDataFetcher {
@@ -82,13 +141,15 @@ class RobloxDocsDataFetcher {
   private cacheExpiry = 24 * 60 * 60 * 1000; // 24 hours as fallback
   private lastUpdateCheckKey = "roblox-docs-last-update-check";
   private updateCheckInterval = 60 * 60 * 1000; // Check for updates once per hour
+  private extensionVersion: string;
 
   // Memory optimization constants
-  private readonly BATCH_SIZE = 25; // Process files in smaller batches
-  private readonly GC_INTERVAL = 50; // Trigger GC more frequently
+  private readonly BATCH_SIZE = 15; // Process files in smaller batches
+  private readonly GC_INTERVAL = 30; // Trigger GC more frequently
 
   constructor() {
     this.cache = new Cache();
+    this.extensionVersion = packageJson.version;
   }
 
   clearCache(): void {
@@ -138,7 +199,7 @@ class RobloxDocsDataFetcher {
   /**
    * Get cached data without any network requests
    */
-  private getCachedData(): { data: DocItem[]; sha: string | null; timestamp: number } | null {
+  private getCachedData(): { data: DocItem[]; sha: string | null; timestamp: number; version?: string } | null {
     const cachedData = this.cache.get(this.cacheKey);
     if (!cachedData) {
       return null;
@@ -147,6 +208,12 @@ class RobloxDocsDataFetcher {
     try {
       const parsed = JSON.parse(cachedData);
       const now = Date.now();
+
+      // Check if extension version has changed
+      if (parsed.version !== this.extensionVersion) {
+        console.log(`Extension version changed from ${parsed.version} to ${this.extensionVersion}, invalidating cache`);
+        return null;
+      }
 
       // Check if cache is expired (fallback time-based check)
       if (now - parsed.timestamp > this.cacheExpiry) {
@@ -213,11 +280,12 @@ class RobloxDocsDataFetcher {
       const zipBuffer = await zipResponse.buffer();
       const docItems = await this.processZipArchiveOptimized(zipBuffer);
 
-      // Cache the results with SHA and timestamp
+      // Cache the results with SHA, timestamp, and extension version
       const cacheData = {
         data: docItems,
         timestamp: Date.now(),
         sha: latestSha, // Store the SHA for future comparisons
+        version: this.extensionVersion, // Store extension version to invalidate cache on updates
       };
       this.cache.set(this.cacheKey, JSON.stringify(cacheData));
 
@@ -316,17 +384,22 @@ class RobloxDocsDataFetcher {
           path: url,
           type: "article",
           title: this.extractTitleFromPath(filePath),
+          content: this.truncateContent(content), // Truncate content to save memory
         };
       }
 
       const metadataStr = metadataMatch[1];
       const metadata = yamlLoad(metadataStr) as Record<string, unknown>;
 
+      // Extract the markdown content after frontmatter
+      const markdownContent = content.substring(metadataMatch[0].length).trim();
+
       return {
         title: (metadata.title as string) || this.extractTitleFromPath(filePath),
         description: this.truncateDescription(metadata.description as string),
         path: url,
         type: "article",
+        content: this.truncateContent(markdownContent), // Truncate to save memory
       };
     } catch (error) {
       console.error(`Error parsing YAML frontmatter in ${filePath}:`, error);
@@ -334,6 +407,7 @@ class RobloxDocsDataFetcher {
         path: url,
         type: "article",
         title: this.extractTitleFromPath(filePath),
+        content: this.truncateContent(content),
       };
     }
   }
@@ -350,6 +424,7 @@ class RobloxDocsDataFetcher {
         type: data.type || "class",
         path: url,
         description: this.truncateDescription(data.summary),
+        content: data.summary || "", // Store main summary as content
         subitems: [],
       };
 
@@ -373,10 +448,27 @@ class RobloxDocsDataFetcher {
               title = item.name;
             }
 
+            const itemWithDescription = item as {
+              summary?: string;
+              description?: string;
+              parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
+              return_type?: string;
+              security?: string | { read?: string; write?: string };
+              tags?: string[];
+            };
+
+            // Use description if available (contains full content with code blocks), otherwise use summary
+            const fullContent = itemWithDescription.description || itemWithDescription.summary || "";
+
             metadata.subitems!.push({
               type: key,
               title,
-              description: this.truncateDescription(item.summary),
+              description: this.truncateDescription(itemWithDescription.summary || itemWithDescription.description),
+              summary: fullContent, // Store full content (description preferred over summary)
+              parameters: itemWithDescription.parameters,
+              returnType: itemWithDescription.return_type,
+              security: this.formatSecurity(itemWithDescription.security),
+              tags: itemWithDescription.tags,
             });
           }
         }
@@ -400,6 +492,40 @@ class RobloxDocsDataFetcher {
     return description;
   }
 
+  private truncateContent(content: string | undefined): string {
+    if (!content) return "";
+
+    // Limit content to first 2000 characters to prevent memory issues
+    // The UI will show a link to view full docs in browser
+    const maxLength = 2000;
+    if (content.length > maxLength) {
+      return content.substring(0, maxLength);
+    }
+    return content;
+  }
+
+  private formatSecurity(security: string | { read?: string; write?: string } | undefined): string | undefined {
+    if (!security) return undefined;
+
+    // If it's already a string
+    if (typeof security === "string") {
+      // Don't show if it's just "None"
+      return security === "None" ? undefined : security;
+    }
+
+    // If it's an object, format it nicely
+    const parts: string[] = [];
+    if (security.read && security.read !== "None") {
+      parts.push(`Read: ${security.read}`);
+    }
+    if (security.write && security.write !== "None") {
+      parts.push(`Write: ${security.write}`);
+    }
+
+    // Only return if there's meaningful security info (not all "None")
+    return parts.length > 0 ? parts.join(", ") : undefined;
+  }
+
   private metadataToDocItem(metadata: FileMetadata): DocItem | null {
     if (!metadata.title) {
       return null;
@@ -417,6 +543,7 @@ class RobloxDocsDataFetcher {
       category,
       keywords: this.generateKeywords(metadata.title, metadata.description || "", metadata.path),
       type,
+      content: metadata.content, // Pass through full content
     };
   }
 
@@ -443,14 +570,34 @@ class RobloxDocsDataFetcher {
     // Determine the specific type based on subitem.type
     const itemType: DocItem["type"] = SUBITEM_TYPE_MAP[subitem.type] || "reference";
 
+    // Just use the summary/description as content
+    // Metadata will be displayed separately in the UI to avoid duplication
+    const content = subitem.summary || subitem.description || "";
+
     return {
       id: `${this.generateIdFromPath(parentMetadata.path)}-${subitem.title.toLowerCase().replace(/[^a-z0-9]/g, "-")}`,
       title: subitem.title,
-      description: subitem.description || `${subitem.type.slice(0, -1)} of ${parentMetadata.title}`, // Remove 's' from end (e.g., "properties" -> "property")
+      description: subitem.description || "No information provided",
       url,
       category,
       keywords: this.generateKeywords(subitem.title, subitem.description || "", parentMetadata.path),
       type: itemType,
+      content, // Include detailed content
+      metadata: {
+        parameters: subitem.parameters?.map((p) => {
+          const parts: string[] = [];
+          if (p.summary) parts.push(p.summary);
+          if (p.default) parts.push(`default: ${p.default}`);
+          return {
+            name: p.name,
+            type: p.type,
+            description: parts.length > 0 ? parts.join(" | ") : undefined,
+          };
+        }),
+        returnType: subitem.returnType,
+        security: subitem.security,
+        tags: subitem.tags,
+      },
     };
   }
 
