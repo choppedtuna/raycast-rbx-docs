@@ -125,8 +125,24 @@ function processCodeBlocks(text: string): string {
   return text.replace(/```(lua|luau)\n([\s\S]*?)```/g, (_m, _lang, code) => `\`\`\`lua\n${code}\`\`\``);
 }
 
+// Helper: Build type lookup from docs (enums, datatypes, classes)
+function buildTypeLookup(docs: DocItem[]): Map<string, string> {
+  const lookup = new Map<string, string>();
+  for (const doc of docs) {
+    if (doc.category === "Enums" && doc.type === "enum") {
+      lookup.set(doc.title, "enums");
+    } else if (doc.category === "Classes" && (doc.type === "class" || doc.type === "service")) {
+      lookup.set(doc.title, "classes");
+    } else if (doc.category === "Globals" && doc.type === "global") {
+      // Datatypes are in globals folder
+      lookup.set(doc.title, "datatypes");
+    }
+  }
+  return lookup;
+}
+
 // Helper: Render markdown for detail view
-function renderDetailMarkdown(doc: DocItem): string {
+function renderDetailMarkdown(doc: DocItem, typeLookup: Map<string, string>): string {
   if (!doc?.title || !doc?.url) return "**Error:** Invalid documentation item";
 
   const parts: string[] = [];
@@ -134,10 +150,22 @@ function renderDetailMarkdown(doc: DocItem): string {
   // Header
   parts.push(`## \`${doc.title}\`\n\n\`${doc.type}\` · ${doc.category}\n\n`);
 
+  // Signature (for methods/functions) - make types clickable only if they exist
+  if (doc.signature) {
+    const linkedSignature = doc.signature.replace(/: ([A-Z]\w+)/g, (_m, type) => {
+      const typeCategory = typeLookup.get(type);
+      if (typeCategory) {
+        return `: [${type}](https://create.roblox.com/docs/reference/engine/${typeCategory}/${type})`;
+      }
+      return `: ${type}`; // No link if type not found in docs
+    });
+    parts.push(`### Signature\n\n${linkedSignature}\n\n`);
+  }
+
   // Description
   if (doc.description) {
     parts.push(`### Description\n\n${processCodeBlocks(processClassReferences(doc.description))}\n\n`);
-  } else {
+  } else if (!doc.signature) {
     parts.push(`### Description\n\n*No preview available. View the full page for details.*\n\n`);
   }
 
@@ -160,6 +188,9 @@ export default function Command() {
   useEffect(() => {
     loadDocsData();
   }, []); // loadDocsData is stable
+
+  // Build type lookup for linking types in signatures
+  const typeLookup = useMemo(() => buildTypeLookup(allDocs), [allDocs]);
 
   const isSearchEmpty = searchText.trim() === "";
 
@@ -330,7 +361,7 @@ export default function Command() {
               title={displayTitle}
               subtitle={!showingDetail ? doc.category : undefined}
               accessories={!showingDetail ? [{ text: doc.type }, { text: truncatedDescription }] : undefined}
-              detail={showingDetail ? <List.Item.Detail markdown={renderDetailMarkdown(doc)} /> : undefined}
+              detail={showingDetail ? <List.Item.Detail markdown={renderDetailMarkdown(doc, typeLookup)} /> : undefined}
               actions={
                 <ActionPanel>
                   <Action title="Open in Browser" onAction={() => open(doc.url)} icon={getIcon(ACTION_ICONS.browser)} />
