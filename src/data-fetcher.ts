@@ -20,6 +20,7 @@ export interface DocItem {
     | "reference"
     | "enum"
     | "global"
+    | "datatype"
     | "property"
     | "method"
     | "event"
@@ -523,6 +524,7 @@ class RobloxDocsDataFetcher {
   private getCategoryFromPath(path: string): string {
     if (path.includes("/reference/engine/classes/")) return "Classes";
     if (path.includes("/reference/engine/enums/")) return "Enums";
+    if (path.includes("/reference/engine/datatypes/")) return "Datatypes";
     if (path.includes("/reference/engine/globals/")) return "Globals";
     if (path.includes("/tutorials/")) return "Tutorials";
     if (path.includes("/scripting/")) return "Scripting";
@@ -540,6 +542,7 @@ class RobloxDocsDataFetcher {
     if (metadata.type === "service") return "service";
     if (metadata.type === "enum") return "enum";
     if (metadata.type === "global") return "global";
+    if (metadata.path.includes("/reference/engine/datatypes/")) return "datatype";
     if (metadata.path.includes("/tutorials/")) return "tutorial";
     if (metadata.path.includes("/reference/")) return "reference";
     return "guide";

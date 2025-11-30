@@ -133,9 +133,11 @@ function buildTypeLookup(docs: DocItem[]): Map<string, string> {
       lookup.set(doc.title, "enums");
     } else if (doc.category === "Classes" && (doc.type === "class" || doc.type === "service")) {
       lookup.set(doc.title, "classes");
-    } else if (doc.category === "Globals" && doc.type === "global") {
-      // Datatypes are in globals folder
+    } else if (doc.category === "Datatypes" && doc.type === "datatype") {
       lookup.set(doc.title, "datatypes");
+    } else if (doc.category === "Globals" && doc.type === "global") {
+      // Globals like task, os, etc. - link to globals
+      lookup.set(doc.title, "globals");
     }
   }
   return lookup;
