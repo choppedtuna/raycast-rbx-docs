@@ -271,7 +271,7 @@ class RobloxDocsDataFetcher {
       if (!zipResponse.body) throw new Error("No response body");
 
       // Stream the ZIP and process files as they arrive - never loads entire ZIP into memory
-      const docItems = await this.processZipStream(zipResponse.body);
+      const docItems = await this.processZipStream(zipResponse.body as unknown as Readable);
 
       // Cache results
       const cacheData = {
