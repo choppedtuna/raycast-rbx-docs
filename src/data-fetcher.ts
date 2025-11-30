@@ -1,8 +1,10 @@
 import { Cache } from "@raycast/api";
 import fetch from "node-fetch";
-import * as unzip from "unzip-stream";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const unzip = require("unzip-stream");
 import { load as yamlLoad } from "js-yaml";
 import packageJson from "../package.json";
+import { Readable } from "stream";
 
 export interface DocItem {
   id: string;
@@ -51,16 +53,10 @@ interface FileMetadata {
   description?: string;
   path: string;
   type: string;
-  content?: string; // Store full content for detail view
   subitems?: Array<{
     type: string;
     title: string;
     description?: string;
-    summary?: string;
-    parameters?: Array<{ name: string; type: string; default?: string }>;
-    returnType?: string;
-    security?: string;
-    tags?: string[];
   }>;
 }
 
@@ -293,15 +289,16 @@ class RobloxDocsDataFetcher {
     }
   }
 
-  private processZipStream(stream: NodeJS.ReadableStream): Promise<DocItem[]> {
+  private processZipStream(stream: Readable): Promise<DocItem[]> {
     const docItems: DocItem[] = [];
 
     return new Promise((resolve, reject) => {
       const parser = unzip.Parse();
 
-      parser.on("entry", (entry: { path: string; type: string; autodrain: () => void }) => {
-        const filePath = entry.path;
-        const type = entry.type;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      parser.on("entry", (entry: any) => {
+        const filePath = entry.path as string;
+        const type = entry.type as string;
 
         // Only process relevant files
         if (
@@ -373,22 +370,17 @@ class RobloxDocsDataFetcher {
           path: url,
           type: "article",
           title: this.extractTitleFromPath(filePath),
-          content: this.truncateContent(content), // Truncate content to save memory
         };
       }
 
       const metadataStr = metadataMatch[1];
       const metadata = yamlLoad(metadataStr) as Record<string, unknown>;
 
-      // Extract the markdown content after frontmatter
-      const markdownContent = content.substring(metadataMatch[0].length).trim();
-
       return {
         title: (metadata.title as string) || this.extractTitleFromPath(filePath),
         description: this.truncateDescription(metadata.description as string),
         path: url,
         type: "article",
-        content: this.truncateContent(markdownContent), // Truncate to save memory
       };
     } catch (error) {
       console.error(`Error parsing YAML frontmatter in ${filePath}:`, error);
@@ -396,7 +388,6 @@ class RobloxDocsDataFetcher {
         path: url,
         type: "article",
         title: this.extractTitleFromPath(filePath),
-        content: this.truncateContent(content),
       };
     }
   }
@@ -413,7 +404,6 @@ class RobloxDocsDataFetcher {
         type: data.type || "class",
         path: url,
         description: this.truncateDescription(data.summary),
-        content: data.summary || "", // Store main summary as content
         subitems: [],
       };
 
@@ -465,28 +455,6 @@ class RobloxDocsDataFetcher {
       return description.substring(0, maxLength) + "...";
     }
     return description;
-  }
-
-  private formatSecurity(security: string | { read?: string; write?: string } | undefined): string | undefined {
-    if (!security) return undefined;
-
-    // If it's already a string
-    if (typeof security === "string") {
-      // Don't show if it's just "None"
-      return security === "None" ? undefined : security;
-    }
-
-    // If it's an object, format it nicely
-    const parts: string[] = [];
-    if (security.read && security.read !== "None") {
-      parts.push(`Read: ${security.read}`);
-    }
-    if (security.write && security.write !== "None") {
-      parts.push(`Write: ${security.write}`);
-    }
-
-    // Only return if there's meaningful security info (not all "None")
-    return parts.length > 0 ? parts.join(", ") : undefined;
   }
 
   private metadataToDocItem(metadata: FileMetadata): DocItem | null {
@@ -557,34 +525,6 @@ class RobloxDocsDataFetcher {
     if (metadata.path.includes("/tutorials/")) return "tutorial";
     if (metadata.path.includes("/reference/")) return "reference";
     return "guide";
-  }
-
-  private generateKeywords(title: string, description: string, path: string): string[] {
-    const keywords = new Set<string>();
-
-    // Add title words
-    title
-      .toLowerCase()
-      .split(/\W+/)
-      .forEach((word) => {
-        if (word.length > 2) keywords.add(word);
-      });
-
-    // Add description words
-    description
-      .toLowerCase()
-      .split(/\W+/)
-      .forEach((word) => {
-        if (word.length > 2) keywords.add(word);
-      });
-
-    // Add path-based keywords
-    const pathParts = path.toLowerCase().split("/");
-    pathParts.forEach((part) => {
-      if (part.length > 2) keywords.add(part);
-    });
-
-    return Array.from(keywords).slice(0, 10);
   }
 
   private generateIdFromPath(path: string): string {
