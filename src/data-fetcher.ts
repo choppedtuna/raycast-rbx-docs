@@ -1,6 +1,6 @@
 import { Cache } from "@raycast/api";
 import fetch from "node-fetch";
-import JSZip from "jszip";
+import * as unzip from "unzip-stream";
 import { load as yamlLoad } from "js-yaml";
 import packageJson from "../package.json";
 
@@ -10,7 +10,6 @@ export interface DocItem {
   description: string;
   url: string;
   category: string;
-  keywords: string[];
   type:
     | "class"
     | "service"
@@ -24,14 +23,7 @@ export interface DocItem {
     | "event"
     | "callback"
     | "function";
-  content?: string; // Full markdown/YAML content for detail view
-  metadata?: {
-    // For API references (classes, enums, etc.)
-    parameters?: Array<{ name: string; type: string; description?: string }>;
-    returnType?: string;
-    security?: string;
-    tags?: string[];
-  };
+  // Removed: keywords (generated on-the-fly), content (use URL), metadata (use URL)
 }
 
 // Constants
@@ -128,24 +120,18 @@ interface SubitemData {
   type: string;
   title: string;
   description?: string;
-  summary?: string;
-  parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
-  returnType?: string;
-  security?: string;
-  tags?: string[];
 }
 
 class RobloxDocsDataFetcher {
   private cache: Cache;
   private cacheKey = "roblox-docs-data";
-  private cacheExpiry = 24 * 60 * 60 * 1000; // 24 hours as fallback
+  private cacheExpiry = 24 * 60 * 60 * 1000; // 24 hours
   private lastUpdateCheckKey = "roblox-docs-last-update-check";
   private updateCheckInterval = 60 * 60 * 1000; // Check for updates once per hour
   private extensionVersion: string;
 
   // Memory optimization constants
-  private readonly BATCH_SIZE = 15; // Process files in smaller batches
-  private readonly GC_INTERVAL = 30; // Trigger GC more frequently
+  private readonly GC_INTERVAL = 10; // Trigger GC every N files
 
   constructor() {
     this.cache = new Cache();
@@ -180,6 +166,7 @@ class RobloxDocsDataFetcher {
   /**
    * Load docs data immediately from cache, then check for updates in background
    * Returns cached data instantly if available, otherwise fetches fresh data
+   * If cache is stale, returns stale data while refreshing in background (no downtime)
    */
   async fetchDocsData(): Promise<DocItem[]> {
     // Try to load from cache first for instant startup
@@ -188,21 +175,48 @@ class RobloxDocsDataFetcher {
     if (cachedData && cachedData.data.length > 0) {
       // Check for updates in background (non-blocking)
       this.checkForUpdatesInBackground(cachedData.sha);
-
       return cachedData.data;
     }
 
-    // No valid cache, fetch fresh data (blocking)
+    // No valid cache - check if we have stale data we can use while refreshing
+    const staleData = this.getCachedData(true);
+
+    if (staleData && staleData.data.length > 0) {
+      // Return stale data - background refresh disabled due to memory constraints
+      // User can manually refresh via "Clear Cache & Refresh" action
+      return staleData.data;
+    }
+
+    // No cache at all, fetch fresh data (blocking)
     return this.fetchFreshData();
   }
 
-  private getCachedData(): { data: DocItem[]; sha: string | null; timestamp: number; version?: string } | null {
+  /**
+   * Check if the current cache is stale (expired or version mismatch)
+   * Returns true if using stale data, false if cache is fresh or empty
+   */
+  isCacheStale(): boolean {
+    const validCache = this.getCachedData(false);
+    if (validCache) return false; // Cache is valid
+
+    const staleCache = this.getCachedData(true);
+    return staleCache !== null; // Has stale data
+  }
+
+  private getCachedData(
+    allowStale = false,
+  ): { data: DocItem[]; sha: string | null; timestamp: number; version?: string } | null {
     const cachedData = this.cache.get(this.cacheKey);
     if (!cachedData) return null;
 
     try {
       const parsed = JSON.parse(cachedData);
       const now = Date.now();
+
+      // If allowing stale data, return it as long as it has data
+      if (allowStale && parsed.data && parsed.data.length > 0) {
+        return parsed;
+      }
 
       // Validate version and expiry
       if (parsed.version !== this.extensionVersion || now - parsed.timestamp > this.cacheExpiry) {
@@ -250,7 +264,7 @@ class RobloxDocsDataFetcher {
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60000);
+      const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout for streaming
 
       const zipResponse = await fetch("https://github.com/Roblox/creator-docs/archive/refs/heads/main.zip", {
         signal: controller.signal,
@@ -258,9 +272,10 @@ class RobloxDocsDataFetcher {
       clearTimeout(timeout);
 
       if (!zipResponse.ok) throw new Error(`Failed to download docs: ${zipResponse.statusText}`);
+      if (!zipResponse.body) throw new Error("No response body");
 
-      const zipBuffer = await zipResponse.buffer();
-      const docItems = await this.processZipArchiveOptimized(zipBuffer);
+      // Stream the ZIP and process files as they arrive - never loads entire ZIP into memory
+      const docItems = await this.processZipStream(zipResponse.body);
 
       // Cache results
       const cacheData = {
@@ -278,83 +293,75 @@ class RobloxDocsDataFetcher {
     }
   }
 
-  private async processZipArchiveOptimized(zipBuffer: Buffer): Promise<DocItem[]> {
-    try {
-      const zip = await JSZip.loadAsync(zipBuffer);
-      const docItems: DocItem[] = [];
+  private processZipStream(stream: NodeJS.ReadableStream): Promise<DocItem[]> {
+    const docItems: DocItem[] = [];
 
-      // Filter relevant files first
-      const relevantFiles: { path: string; file: JSZip.JSZipObject }[] = [];
+    return new Promise((resolve, reject) => {
+      const parser = unzip.Parse();
 
-      zip.forEach((relativePath, file) => {
-        // Filter for relevant files in content/en-us directory
+      parser.on("entry", (entry: { path: string; type: string; autodrain: () => void }) => {
+        const filePath = entry.path;
+        const type = entry.type;
+
+        // Only process relevant files
         if (
-          relativePath.includes("content/en-us/") &&
-          (relativePath.endsWith(".md") || relativePath.endsWith(".yaml")) &&
-          !file.dir
+          type === "File" &&
+          filePath.includes("content/en-us/") &&
+          (filePath.endsWith(".md") || filePath.endsWith(".yaml"))
         ) {
-          relevantFiles.push({ path: relativePath, file });
+          const chunks: Buffer[] = [];
+
+          entry.on("data", (chunk: Buffer) => {
+            chunks.push(chunk);
+          });
+
+          entry.on("end", () => {
+            try {
+              const contentStr = Buffer.concat(chunks).toString("utf-8");
+              const url = filePath.substring(filePath.indexOf("content/en-us/"));
+
+              let metadata: FileMetadata | null = null;
+              if (filePath.endsWith(".md")) {
+                metadata = this.parseMarkdownFile(filePath, url, contentStr);
+              } else if (filePath.endsWith(".yaml")) {
+                metadata = this.parseYamlFile(filePath, url, contentStr);
+              }
+
+              if (metadata) {
+                const docItem = this.metadataToDocItem(metadata);
+                if (docItem) {
+                  docItems.push(docItem);
+
+                  if (metadata.subitems) {
+                    for (const subitem of metadata.subitems) {
+                      const subDocItem = this.subitemToDocItem(subitem, metadata);
+                      if (subDocItem) {
+                        docItems.push(subDocItem);
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              console.error(`Error processing ${filePath}:`, error);
+            }
+          });
+        } else {
+          // Skip non-relevant files
+          entry.autodrain();
         }
       });
 
-      // Process files in batches to manage memory
-      for (let i = 0; i < relevantFiles.length; i += this.BATCH_SIZE) {
-        const batch = relevantFiles.slice(i, i + this.BATCH_SIZE);
+      parser.on("close", () => {
+        resolve(docItems);
+      });
 
-        const batchPromises = batch.map(async ({ path, file }) => {
-          try {
-            const content = await file.async("text");
-            const url = path.substring(path.indexOf("content/en-us/"));
+      parser.on("error", (error: Error) => {
+        reject(error);
+      });
 
-            if (path.endsWith(".md")) {
-              return this.parseMarkdownFile(path, url, content);
-            } else if (path.endsWith(".yaml")) {
-              return this.parseYamlFile(path, url, content);
-            }
-            return null;
-          } catch (error) {
-            console.error(`Error processing ${path}:`, error);
-            return null;
-          }
-        });
-
-        const batchResults = await Promise.all(batchPromises);
-        const validMetadata = batchResults.filter((m): m is FileMetadata => m !== null);
-
-        // Convert metadata to DocItems and add to results
-        for (const metadata of validMetadata) {
-          const docItem = this.metadataToDocItem(metadata);
-          if (docItem) {
-            docItems.push(docItem);
-
-            // Add subitems as separate entries
-            if (metadata.subitems) {
-              for (const subitem of metadata.subitems) {
-                const subDocItem = this.subitemToDocItem(subitem, metadata);
-                if (subDocItem) {
-                  docItems.push(subDocItem);
-                }
-              }
-            }
-          }
-        }
-
-        // Force garbage collection periodically to free memory
-        if (i > 0 && i % this.GC_INTERVAL === 0) {
-          if (global.gc) {
-            global.gc();
-          }
-        }
-
-        // Small delay to prevent overwhelming the system
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-
-      return docItems;
-    } catch (error) {
-      console.error("Error processing ZIP archive:", error);
-      throw error;
-    }
+      stream.pipe(parser);
+    });
   }
 
   private parseMarkdownFile(filePath: string, url: string, content: string): FileMetadata | null {
@@ -415,7 +422,7 @@ class RobloxDocsDataFetcher {
         const keyData = data[key as keyof YAMLDocData];
         if (keyData && Array.isArray(keyData)) {
           // Limit subitems to prevent memory bloat
-          const items = keyData.slice(0, 50); // Max 50 subitems per category
+          const items = keyData.slice(0, 15); // Max 15 subitems per category
 
           for (const item of items) {
             // Skip deprecated items
@@ -430,27 +437,13 @@ class RobloxDocsDataFetcher {
               title = item.name;
             }
 
-            const itemWithDescription = item as {
-              summary?: string;
-              description?: string;
-              parameters?: Array<{ name: string; type: string; default?: string; summary?: string }>;
-              return_type?: string;
-              security?: string | { read?: string; write?: string };
-              tags?: string[];
-            };
+            const itemWithDescription = item as { summary?: string; description?: string };
 
-            // Use description if available (contains full content with code blocks), otherwise use summary
-            const fullContent = itemWithDescription.description || itemWithDescription.summary || "";
-
+            // Only store minimal data needed for list display
             metadata.subitems!.push({
               type: key,
               title,
               description: this.truncateDescription(itemWithDescription.summary || itemWithDescription.description),
-              summary: fullContent, // Store full content (description preferred over summary)
-              parameters: itemWithDescription.parameters,
-              returnType: itemWithDescription.return_type,
-              security: this.formatSecurity(itemWithDescription.security),
-              tags: itemWithDescription.tags,
             });
           }
         }
@@ -466,24 +459,12 @@ class RobloxDocsDataFetcher {
   private truncateDescription(description: string | undefined): string {
     if (!description) return "";
 
-    // Limit description length to prevent memory bloat
-    const maxLength = 200;
+    // Limit description to 100 chars to reduce memory
+    const maxLength = 100;
     if (description.length > maxLength) {
       return description.substring(0, maxLength) + "...";
     }
     return description;
-  }
-
-  private truncateContent(content: string | undefined): string {
-    if (!content) return "";
-
-    // Limit content to first 2000 characters to prevent memory issues
-    // The UI will show a link to view full docs in browser
-    const maxLength = 2000;
-    if (content.length > maxLength) {
-      return content.substring(0, maxLength);
-    }
-    return content;
   }
 
   private formatSecurity(security: string | { read?: string; write?: string } | undefined): string | undefined {
@@ -513,19 +494,13 @@ class RobloxDocsDataFetcher {
       return null;
     }
 
-    const category = this.getCategoryFromPath(metadata.path);
-    const type = this.getTypeFromMetadata(metadata);
-    const url = this.pathToUrl(metadata.path);
-
     return {
       id: this.generateIdFromPath(metadata.path),
       title: metadata.title,
       description: metadata.description || "",
-      url,
-      category,
-      keywords: this.generateKeywords(metadata.title, metadata.description || "", metadata.path),
-      type,
-      content: metadata.content, // Pass through full content
+      url: this.pathToUrl(metadata.path),
+      category: this.getCategoryFromPath(metadata.path),
+      type: this.getTypeFromMetadata(metadata),
     };
   }
 
@@ -534,11 +509,9 @@ class RobloxDocsDataFetcher {
       return null;
     }
 
-    const category = this.getCategoryFromPath(parentMetadata.path);
     const baseUrl = this.pathToUrl(parentMetadata.path);
 
-    // Extract just the property/method name for the anchor (remove class prefix if present)
-    // Handle both "Class.Property" and "Class:Method" formats
+    // Extract anchor name for direct navigation
     let anchorName = subitem.title;
     if (subitem.title.includes(":")) {
       anchorName = subitem.title.split(":").pop() || subitem.title;
@@ -546,40 +519,13 @@ class RobloxDocsDataFetcher {
       anchorName = subitem.title.split(".").pop() || subitem.title;
     }
 
-    // Generate URL with anchor link for direct navigation to the specific property/method/event
-    const url = `${baseUrl}#${anchorName}`;
-
-    // Determine the specific type based on subitem.type
-    const itemType: DocItem["type"] = SUBITEM_TYPE_MAP[subitem.type] || "reference";
-
-    // Just use the summary/description as content
-    // Metadata will be displayed separately in the UI to avoid duplication
-    const content = subitem.summary || subitem.description || "";
-
     return {
       id: `${this.generateIdFromPath(parentMetadata.path)}-${subitem.title.toLowerCase().replace(/[^a-z0-9]/g, "-")}`,
       title: subitem.title,
-      description: subitem.description || "No information provided",
-      url,
-      category,
-      keywords: this.generateKeywords(subitem.title, subitem.description || "", parentMetadata.path),
-      type: itemType,
-      content, // Include detailed content
-      metadata: {
-        parameters: subitem.parameters?.map((p) => {
-          const parts: string[] = [];
-          if (p.summary) parts.push(p.summary);
-          if (p.default) parts.push(`default: ${p.default}`);
-          return {
-            name: p.name,
-            type: p.type,
-            description: parts.length > 0 ? parts.join(" | ") : undefined,
-          };
-        }),
-        returnType: subitem.returnType,
-        security: subitem.security,
-        tags: subitem.tags,
-      },
+      description: subitem.description || "",
+      url: `${baseUrl}#${anchorName}`,
+      category: this.getCategoryFromPath(parentMetadata.path),
+      type: SUBITEM_TYPE_MAP[subitem.type] || "reference",
     };
   }
 

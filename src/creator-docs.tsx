@@ -134,40 +134,11 @@ function renderDetailMarkdown(doc: DocItem): string {
   // Header
   parts.push(`## \`${doc.title}\`\n\n\`${doc.type}\` · ${doc.category}\n\n`);
 
-  // Metadata
-  if (doc.metadata) {
-    const { parameters, returnType, tags, security } = doc.metadata;
-
-    if (parameters?.length) {
-      parts.push(`### Parameters\n\n`);
-      parameters.forEach((p, i) => {
-        parts.push(`${p.name} · \`${processClassReferences(p.type)}\``);
-        if (p.description) parts.push(`\n\n${processClassReferences(p.description)}`);
-        if (i < parameters.length - 1) parts.push(`\n\n`);
-      });
-      parts.push(`\n\n`);
-    }
-
-    if (returnType) parts.push(`### Returns\n\n\`${processClassReferences(returnType)}\`\n\n`);
-    if (tags?.length) parts.push(`### Tags\n\n${tags.map((t) => `\`${t}\``).join("  ")}\n\n`);
-    if (security) parts.push(`**Security:** ${security}\n\n`);
-
-    if (parameters || returnType || tags || security) parts.push(`---\n\n`);
-  }
-
-  // Content
-  const hasContent = doc.content?.trim();
-  const contentMatchesDescription = doc.content?.trim() === doc.description?.trim();
-
-  if (doc.description && (!hasContent || contentMatchesDescription)) {
+  // Description
+  if (doc.description) {
     parts.push(`### Description\n\n${processCodeBlocks(processClassReferences(doc.description))}\n\n`);
-  } else if (hasContent && !contentMatchesDescription) {
-    const truncated = doc.content!.length > 1500 ? doc.content!.substring(0, 1500) : doc.content!;
-    parts.push(`### Details\n\n${processCodeBlocks(processClassReferences(truncated))}\n\n`);
-  } else if (!doc.description && !hasContent) {
-    parts.push(
-      `### Description\n\n*No preview available*\n\n*This item has limited documentation. View the full page for more details.*\n\n`,
-    );
+  } else {
+    parts.push(`### Description\n\n*No preview available. View the full page for details.*\n\n`);
   }
 
   // Footer - always add this
@@ -216,17 +187,16 @@ export default function Command() {
       if (!titleMatch) {
         // Only check other fields if title doesn't match
         const descriptionMatch = doc.description.toLowerCase().includes(searchLower);
-        const keywordMatch = doc.keywords.some((keyword) => keyword.toLowerCase().includes(searchLower));
         const categoryMatch = doc.category.toLowerCase().includes(searchLower);
         const typeMatch = doc.type.toLowerCase().includes(searchLower);
 
         // Skip if no match at all
-        if (!descriptionMatch && !keywordMatch && !categoryMatch && !typeMatch) {
+        if (!descriptionMatch && !categoryMatch && !typeMatch) {
           continue;
         }
 
         // Non-title matches get lower scores
-        const matchScore = descriptionMatch ? 100 : keywordMatch ? 75 : 50;
+        const matchScore = descriptionMatch ? 100 : 50;
         const categoryMultiplier = doc.category === "Classes" ? 8 : 1;
 
         results.push({ doc, score: matchScore * categoryMultiplier });
